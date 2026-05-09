@@ -26,8 +26,9 @@ AMIRI_FONT_URL = "https://github.com/googlefonts/amiri/raw/main/fonts/ttf/Amiri-
 FONT_FILENAME = "Amiri-Regular.ttf"
 ARCHIVE_DIR = "الفيديوهات_المنتجة"
 
+# Ensure output directory exists safely
 if not os.path.exists(ARCHIVE_DIR):
-    os.makedirs(ARCHIVE_DIR)
+    os.makedirs(ARCHIVE_DIR, exist_ok=True)
 
 # ==================== Helper Functions ====================
 def check_ffmpeg(manual_path=None):
@@ -216,19 +217,19 @@ def build_video(video_path, audio_path, words, font_path, font_size, out_path):
         final = CompositeVideoClip([bg, overlay, *word_clips], size=(VIDEO_W, VIDEO_H))
         final = final.with_audio(audio).with_duration(audio.duration)
         
-        # High-Speed Windows-Optimized Export
+        # High-Speed Export
         final.write_videofile(
             out_path, 
             fps=24, 
             codec="libx264", 
             audio_codec="aac", 
             preset="ultrafast",
-            logger=None,       # Disable logger to prevent UI blocking
+            logger=None,
             temp_audiofile=os.path.join(tempfile.gettempdir(), "temp-audio.m4a"),
             remove_temp=True
         )
     finally:
-        # Cleanup to prevent file locks and memory leaks
+        # Cleanup
         try: audio.close()
         except: pass
         try: bg.close()
@@ -328,7 +329,7 @@ with tab_create:
                         final_v_path = fetch_pexels_video(video_query, api_key)
                     
                     prog_bar.progress(30)
-                    msg_box.info("جاري مطابقة الزمن ودمج النصوص (هذا سيستغرق دقيقة واحدة تقريباً)...")
+                    msg_box.info("جاري مطابقة الزمن ودمج النصوص...")
                     
                     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                     save_name = f"Quran_Studio_{timestamp}.mp4"
@@ -337,7 +338,7 @@ with tab_create:
                     build_video(final_v_path, st.session_state['audio_path'], st.session_state['words'], FONT_FILENAME, font_size, save_full_path)
                     
                     prog_bar.progress(100)
-                    msg_box.success(f"✅ تم الإنتاج بنجاح! تم الحفظ في الأرشيف باسم: {save_name}")
+                    msg_box.success(f"✅ تم الإنتاج بنجاح!")
                     st.balloons()
                     st.session_state['latest_prod'] = save_full_path
             except Exception as e:
@@ -356,14 +357,12 @@ with tab_archive:
     archive_files = get_archive_list()
     
     if not archive_files:
-        st.info("لا توجد فيديوهات في الأرشيف بعد. ابدأ بإنتاج أول فيديو لك!")
+        st.info("لا توجد فيديوهات في الأرشيف بعد.")
     else:
-        # Display in a grid
         cols = st.columns(3)
         for i, vid in enumerate(archive_files):
             with cols[i % 3]:
                 st.markdown(f'<div class="video-grid-item"><b>{vid[:20]}...</b></div>', unsafe_allow_html=True)
-                # Show small preview if possible or just info
                 st.video(os.path.join(ARCHIVE_DIR, vid))
                 with open(os.path.join(ARCHIVE_DIR, vid), "rb") as f:
                     st.download_button(f"📥 تحميل", f, vid, "video/mp4", key=f"dl_{vid}")
@@ -373,13 +372,7 @@ with tab_guide:
     st.markdown("""
     <div class="studio-card">
     <h3>📖 دليل استخدام استوديو القرآن</h3>
-    <ol>
-        <li><b>الصوت:</b> ارفع تلاوة نقية (بدون مؤثرات صدى قوية) لتحصل على أدق النتائج.</li>
-        <li><b>التحليل:</b> نستخدم ذكاء اصطناعي عالمي (OpenAI Whisper) لفهم التوقيت الزمني لكل كلمة.</li>
-        <li><b>المطابقة الزمنية:</b> لا تقلق بشأن طول فيديو الخلفية، التطبيق سيقوم بقصه تلقائياً ليناسب الصوت بالملي ثانية.</li>
-        <li><b>الأرشيف:</b> جميع فيديوهاتك تُحفظ تلقائياً في مجلد <code>الفيديوهات_المنتجة</code> لتتمكن من العودة إليها لاحقاً.</li>
-    </ol>
-    <p>💡 <b>نصيحة:</b> إذا كان التطبيق بطيئاً، أغلق أي برامج مونتاج أو ألعاب مفتوحة على جهازك.</p>
+    <p>تم تصميم هذا الاستوديو ليعمل بالكامل عبر الإنترنت دون الحاجة لفتح أي شاشة سوداء على جهازك.</p>
     </div>
     """, unsafe_allow_html=True)
 
