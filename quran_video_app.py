@@ -25,7 +25,8 @@ VIDEO_W, VIDEO_H = 1080, 1920
 AMIRI_FONT_URL = "https://github.com/googlefonts/amiri/raw/main/fonts/ttf/Amiri-Regular.ttf"
 FONT_FILENAME = "Amiri-Regular.ttf"
 FONTS_DIR = "font_ Arabic"
-ARCHIVE_DIR = "الفيديوهات_المنتجة"
+# Use English name for folder to avoid URL encoding issues on Cloud, but keep display Arabic
+ARCHIVE_DIR = "produced_videos" 
 
 os.makedirs(ARCHIVE_DIR, exist_ok=True)
 os.makedirs(FONTS_DIR, exist_ok=True)
@@ -33,23 +34,30 @@ os.makedirs(FONTS_DIR, exist_ok=True)
 # ==================== Helper Functions ====================
 def get_available_fonts():
     """Lists all fonts with extreme robust searching (local & recursive)"""
+    # Start with default font
     fonts = { "الخط الافتراضي (Amiri)": FONT_FILENAME }
     
-    # 1. Search in current directory and subdirectories
+    # 1. Search in current directory and subdirectories recursively
     try:
         for root, dirs, files in os.walk("."):
+            # Skip hidden folders
+            if any(part.startswith('.') for part in root.split(os.sep)):
+                continue
+                
             for f in files:
                 if f.lower().endswith(('.ttf', '.otf')):
-                    # Skip some system/temp fonts if necessary
-                    if "tmp" in root.lower() or ".git" in root.lower(): continue
+                    # Clean name for display
+                    name = f.replace("ArbFONTS-", "").replace(".ttf", "").replace(".otf", "").replace("-", " ").replace("_", " ")
+                    full_path = os.path.join(root, f)
                     
-                    clean_name = f.replace("ArbFONTS-", "").replace(".ttf", "").replace(".otf", "").replace("-", " ")
-                    # If multiple fonts have same clean name, add folder name to distinguish
-                    if clean_name in fonts:
-                        clean_name = f"{clean_name} ({os.path.basename(root)})"
-                    
-                    fonts[clean_name] = os.path.abspath(os.path.join(root, f))
-    except: pass
+                    # Prevent duplicates and keep names clean
+                    if name not in fonts:
+                        fonts[name] = full_path
+                    else:
+                        unique_name = f"{name} ({os.path.basename(root)})"
+                        fonts[unique_name] = full_path
+    except Exception as e:
+        print(f"Error scanning fonts: {e}")
     
     return fonts
 def check_ffmpeg():
@@ -351,6 +359,13 @@ with st.sidebar:
     st.divider()
     st.markdown("### 🖋️ إعدادات الخط")
     available_fonts = get_available_fonts()
+    
+    # Debug: Show how many fonts were found
+    if len(available_fonts) <= 1:
+        st.warning("⚠️ لم يتم العثور على خطوط إضافية. تأكد من رفع مجلد الخطوط إلى GitHub.")
+    else:
+        st.success(f"✅ تم العثور على {len(available_fonts)-1} خطوط إضافية.")
+
     font_choice = st.selectbox("اختر الخط العربي", options=list(available_fonts.keys()))
     selected_font_path = available_fonts[font_choice]
     
