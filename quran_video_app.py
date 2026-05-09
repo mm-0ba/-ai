@@ -24,7 +24,7 @@ PEXELS_API_BASE = "https://api.pexels.com/videos"
 VIDEO_W, VIDEO_H = 1080, 1920
 AMIRI_FONT_URL = "https://github.com/googlefonts/amiri/raw/main/fonts/ttf/Amiri-Regular.ttf"
 FONT_FILENAME = "Amiri-Regular.ttf"
-FONTS_DIR = "font_ Arabic"
+FONTS_DIR = "fonts"
 # Use English name for folder to avoid URL encoding issues on Cloud, but keep display Arabic
 ARCHIVE_DIR = "produced_videos" 
 
@@ -37,27 +37,30 @@ def get_available_fonts():
     # Start with default font
     fonts = { "الخط الافتراضي (Amiri)": FONT_FILENAME }
     
-    # 1. Search in current directory and subdirectories recursively
+    # 1. First priority: Check the standard 'fonts' directory
+    if os.path.exists(FONTS_DIR):
+        try:
+            for f in os.listdir(FONTS_DIR):
+                if f.lower().endswith(('.ttf', '.otf')):
+                    name = f.replace("ArbFONTS-", "").replace(".ttf", "").replace(".otf", "").replace("-", " ").replace("_", " ")
+                    fonts[name] = os.path.abspath(os.path.join(FONTS_DIR, f))
+        except: pass
+
+    # 2. Secondary: Recursive search in all subdirectories just in case
     try:
-        for root, dirs, files in os.walk("."):
-            # Skip hidden folders
-            if any(part.startswith('.') for part in root.split(os.sep)):
-                continue
+        cwd = os.getcwd()
+        for root, dirs, files in os.walk(cwd):
+            if any(part.startswith('.') for part in root.split(os.sep)): continue
+            if root == os.path.abspath(FONTS_DIR): continue # Already scanned
                 
             for f in files:
                 if f.lower().endswith(('.ttf', '.otf')):
-                    # Clean name for display
+                    if f == FONT_FILENAME: continue
                     name = f.replace("ArbFONTS-", "").replace(".ttf", "").replace(".otf", "").replace("-", " ").replace("_", " ")
-                    full_path = os.path.join(root, f)
-                    
-                    # Prevent duplicates and keep names clean
+                    full_path = os.path.abspath(os.path.join(root, f))
                     if name not in fonts:
                         fonts[name] = full_path
-                    else:
-                        unique_name = f"{name} ({os.path.basename(root)})"
-                        fonts[unique_name] = full_path
-    except Exception as e:
-        print(f"Error scanning fonts: {e}")
+    except: pass
     
     return fonts
 def check_ffmpeg():
@@ -362,7 +365,13 @@ with st.sidebar:
     
     # Debug: Show how many fonts were found
     if len(available_fonts) <= 1:
-        st.warning("⚠️ لم يتم العثور على خطوط إضافية. تأكد من رفع مجلد الخطوط إلى GitHub.")
+        st.warning("⚠️ لم يتم العثور على خطوط إضافية.")
+        with st.expander("🤔 لماذا لا تظهر خطوطي؟"):
+            st.write("""
+            1. **تأكد من الرفع:** يجب رفع مجلد الخطوط بالكامل إلى GitHub.
+            2. **اسم المجلد:** يفضل أن يكون اسم المجلد بسيطاً مثل `fonts` وبدون مسافات.
+            3. **صيغة الملفات:** يجب أن تنتهي الخطوط بـ `.ttf` أو `.otf`.
+            """)
     else:
         st.success(f"✅ تم العثور على {len(available_fonts)-1} خطوط إضافية.")
 
