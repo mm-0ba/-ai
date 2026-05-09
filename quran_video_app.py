@@ -32,20 +32,29 @@ os.makedirs(FONTS_DIR, exist_ok=True)
 
 # ==================== Helper Functions ====================
 def get_available_fonts():
-    """Lists all fonts in the font_ Arabic folder"""
-    if not os.path.exists(FONTS_DIR): return { "الخط الافتراضي": FONT_FILENAME }
+    """Lists all fonts in the detected fonts folder with robust searching"""
+    target_dir = FONTS_DIR
+    
+    # Auto-detect if folder name is slightly different (e.g. extra spaces)
+    if not os.path.exists(target_dir):
+        possible_dirs = [d for d in os.listdir(".") if os.path.isdir(d) and ("font" in d.lower() or "خط" in d)]
+        if possible_dirs:
+            target_dir = possible_dirs[0]
+    
+    if not os.path.exists(target_dir):
+        return { "الخط الافتراضي (Amiri)": FONT_FILENAME }
     
     fonts = {}
-    # Primary fonts from local folder
-    for f in os.listdir(FONTS_DIR):
-        if f.lower().endswith(('.ttf', '.otf')):
-            # Clean name for display
-            clean_name = f.replace("ArbFONTS-", "").replace(".ttf", "").replace(".otf", "").replace("-", " ")
-            fonts[clean_name] = os.path.join(FONTS_DIR, f)
+    try:
+        for f in os.listdir(target_dir):
+            if f.lower().endswith(('.ttf', '.otf')):
+                # Clean name for display
+                clean_name = f.replace("ArbFONTS-", "").replace(".ttf", "").replace(".otf", "").replace("-", " ")
+                fonts[clean_name] = os.path.join(target_dir, f)
+    except: pass
     
-    # Add fallback if folder is empty
     if not fonts:
-        fonts["الخط الافتراضي"] = FONT_FILENAME
+        fonts["الخط الافتراضي (Amiri)"] = FONT_FILENAME
         
     return fonts
 def check_ffmpeg():
@@ -235,6 +244,13 @@ def fetch_pexels_video(query, api_key):
 
 def build_video_ultra(video_path, audio_path, words, font_size, out_path, sp_placeholder, prog_bar, selected_font_path):
     try:
+        if not video_path or not os.path.exists(video_path):
+            raise ValueError("فشل في العثور على ملف الفيديو الخلفية. يرجى التأكد من الرفع أو مفتاح Pexels.")
+        if not audio_path or not os.path.exists(audio_path):
+            raise ValueError("فشل في العثور على ملف الصوت.")
+        if not words:
+            raise ValueError("لم يتم تحليل كلمات الصوت. يرجى الضغط على 'تحليل الصوت' أولاً.")
+
         update_smart_progress(sp_placeholder, prog_bar, 40, "🚀 جاري تهيئة الموارد الفنية...")
         audio = AudioFileClip(audio_path)
         bg = VideoFileClip(video_path).without_audio()
@@ -260,6 +276,8 @@ def build_video_ultra(video_path, audio_path, words, font_size, out_path, sp_pla
         word_clips = []
         # Use absolute path for the selected font
         full_font_path = os.path.abspath(selected_font_path)
+        if not os.path.exists(full_font_path):
+            full_font_path = os.path.abspath(FONT_FILENAME)
         
         for w in words:
             shaped = prepare_arabic_text(w["word"])
@@ -282,7 +300,11 @@ def build_video_ultra(video_path, audio_path, words, font_size, out_path, sp_pla
             word_clips.append(t_clip)
 
         update_smart_progress(sp_placeholder, prog_bar, 65, "🎬 جاري الدمج النهائي (ذكاء خارق)...")
-        final = CompositeVideoClip([bg, overlay, *word_clips], size=(VIDEO_W, VIDEO_H))
+        
+        # Validate all clips before compositing to avoid NoneType errors
+        valid_clips = [bg, overlay] + [c for c in word_clips if c is not None]
+        
+        final = CompositeVideoClip(valid_clips, size=(VIDEO_W, VIDEO_H))
         final = final.with_audio(audio).with_duration(audio.duration)
         
         # Real-time Logger for MoviePy
@@ -301,8 +323,14 @@ def build_video_ultra(video_path, audio_path, words, font_size, out_path, sp_pla
         )
         update_smart_progress(sp_placeholder, prog_bar, 100, "✅ تم الإنتاج بنجاح!")
         return True
+    except Exception as e:
+        raise e
     finally:
-        try: audio.close(); bg.close(); final.close()
+        try: audio.close()
+        except: pass
+        try: bg.close()
+        except: pass
+        try: final.close()
         except: pass
 
 # ==================== UI Setup ====================
