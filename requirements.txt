@@ -1,0 +1,9 @@
+streamlit
+openai-whisper
+moviepy>=2.0.0
+requests
+pillow
+arabic-reshaper
+python-bidi==0.4.2
+torch
+numba

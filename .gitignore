@@ -1,0 +1,21 @@
+# Python temporary files
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+
+# Streamlit
+.streamlit/
+
+# Project specific
+الفيديوهات_المنتجة/
+temp-audio.m4a
+quran_pro_video.mp4
+quran_video_final.mp4
+*.mp3
+*.wav
+
+# OS files
+.DS_Store
+Thumbs.db
