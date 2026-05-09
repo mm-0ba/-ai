@@ -32,30 +32,25 @@ os.makedirs(FONTS_DIR, exist_ok=True)
 
 # ==================== Helper Functions ====================
 def get_available_fonts():
-    """Lists all fonts in the detected fonts folder with robust searching"""
-    target_dir = FONTS_DIR
+    """Lists all fonts with extreme robust searching (local & recursive)"""
+    fonts = { "الخط الافتراضي (Amiri)": FONT_FILENAME }
     
-    # Auto-detect if folder name is slightly different (e.g. extra spaces)
-    if not os.path.exists(target_dir):
-        possible_dirs = [d for d in os.listdir(".") if os.path.isdir(d) and ("font" in d.lower() or "خط" in d)]
-        if possible_dirs:
-            target_dir = possible_dirs[0]
-    
-    if not os.path.exists(target_dir):
-        return { "الخط الافتراضي (Amiri)": FONT_FILENAME }
-    
-    fonts = {}
+    # 1. Search in current directory and subdirectories
     try:
-        for f in os.listdir(target_dir):
-            if f.lower().endswith(('.ttf', '.otf')):
-                # Clean name for display
-                clean_name = f.replace("ArbFONTS-", "").replace(".ttf", "").replace(".otf", "").replace("-", " ")
-                fonts[clean_name] = os.path.join(target_dir, f)
+        for root, dirs, files in os.walk("."):
+            for f in files:
+                if f.lower().endswith(('.ttf', '.otf')):
+                    # Skip some system/temp fonts if necessary
+                    if "tmp" in root.lower() or ".git" in root.lower(): continue
+                    
+                    clean_name = f.replace("ArbFONTS-", "").replace(".ttf", "").replace(".otf", "").replace("-", " ")
+                    # If multiple fonts have same clean name, add folder name to distinguish
+                    if clean_name in fonts:
+                        clean_name = f"{clean_name} ({os.path.basename(root)})"
+                    
+                    fonts[clean_name] = os.path.abspath(os.path.join(root, f))
     except: pass
     
-    if not fonts:
-        fonts["الخط الافتراضي (Amiri)"] = FONT_FILENAME
-        
     return fonts
 def check_ffmpeg():
     if shutil.which("ffmpeg"): return shutil.which("ffmpeg")
@@ -205,23 +200,39 @@ def load_whisper_model(size):
     return whisper.load_model(size, device="cpu")
 
 def transcribe_audio(path, size):
-    model = load_whisper_model(size)
-    # fp16=False is mandatory for CPU execution
-    # Using segments to potentially show progress in future
-    result = model.transcribe(path, language="ar", word_timestamps=True, fp16=False, verbose=False)
     words = []
-    for seg in result["segments"]:
-        for w in seg.get("words", []):
-            words.append({"word": w["word"].strip(), "start": w["start"], "end": w["end"]})
-    
-    # Smart check: if no words found, try without word_timestamps as fallback
-    if not words and result["text"]:
-        # Split text into chunks if timestamps fail
-        text = result["text"].split()
-        duration = AudioFileClip(path).duration
-        chunk_dur = duration / len(text) if text else 0
-        for i, word in enumerate(text):
-            words.append({"word": word, "start": i * chunk_dur, "end": (i+1) * chunk_dur})
+    try:
+        model = load_whisper_model(size)
+        # fp16=False is mandatory for CPU execution
+        result = model.transcribe(path, language="ar", word_timestamps=True, fp16=False, verbose=False)
+        
+        if not result or not isinstance(result, dict):
+            return []
+
+        segments = result.get("segments", [])
+        if segments:
+            for seg in segments:
+                if seg and "words" in seg:
+                    for w in seg["words"]:
+                        words.append({
+                            "word": w.get("word", "").strip(), 
+                            "start": w.get("start", 0), 
+                            "end": w.get("end", 0)
+                        })
+        
+        # Fallback to text split if no word timestamps
+        if not words and result.get("text"):
+            text = result["text"].split()
+            try:
+                audio_clip = AudioFileClip(path)
+                duration = audio_clip.duration
+                audio_clip.close()
+                chunk_dur = duration / len(text) if text else 0
+                for i, word in enumerate(text):
+                    words.append({"word": word, "start": i * chunk_dur, "end": (i+1) * chunk_dur})
+            except: pass
+    except Exception as e:
+        st.error(f"خطأ في التحليل الذكي: {e}")
             
     return words
 
@@ -243,13 +254,14 @@ def fetch_pexels_video(query, api_key):
     return None
 
 def build_video_ultra(video_path, audio_path, words, font_size, out_path, sp_placeholder, prog_bar, selected_font_path):
+    audio, bg, final = None, None, None
     try:
         if not video_path or not os.path.exists(video_path):
-            raise ValueError("فشل في العثور على ملف الفيديو الخلفية. يرجى التأكد من الرفع أو مفتاح Pexels.")
+            raise ValueError("فشل في العثور على ملف الفيديو الخلفية.")
         if not audio_path or not os.path.exists(audio_path):
             raise ValueError("فشل في العثور على ملف الصوت.")
-        if not words:
-            raise ValueError("لم يتم تحليل كلمات الصوت. يرجى الضغط على 'تحليل الصوت' أولاً.")
+        if not words or not isinstance(words, list):
+            raise ValueError("لم يتم تحليل كلمات الصوت بشكل صحيح.")
 
         update_smart_progress(sp_placeholder, prog_bar, 40, "🚀 جاري تهيئة الموارد الفنية...")
         audio = AudioFileClip(audio_path)
@@ -274,12 +286,12 @@ def build_video_ultra(video_path, audio_path, words, font_size, out_path, sp_pla
 
         update_smart_progress(sp_placeholder, prog_bar, 55, "✍️ جاري معالجة النصوص والتشكيل العربي...")
         word_clips = []
-        # Use absolute path for the selected font
         full_font_path = os.path.abspath(selected_font_path)
         if not os.path.exists(full_font_path):
             full_font_path = os.path.abspath(FONT_FILENAME)
         
         for w in words:
+            if not isinstance(w, dict) or "word" not in w: continue
             shaped = prepare_arabic_text(w["word"])
             try:
                 t_clip = TextClip(
@@ -292,23 +304,21 @@ def build_video_ultra(video_path, audio_path, words, font_size, out_path, sp_pla
                     method="label",
                     text_align="center"
                 )
-            except:
-                t_clip = TextClip(text=shaped, font_size=font_size, color="white", method="label")
-                
-            t_clip = t_clip.with_start(w["start"]).with_duration(max(w["end"] - w["start"], 0.15))\
-                         .with_position(("center", VIDEO_H * 0.72))
-            word_clips.append(t_clip)
+                t_clip = t_clip.with_start(w.get("start", 0)).with_duration(max(w.get("end", 0) - w.get("start", 0), 0.15))\
+                             .with_position(("center", VIDEO_H * 0.72))
+                word_clips.append(t_clip)
+            except: pass
 
         update_smart_progress(sp_placeholder, prog_bar, 65, "🎬 جاري الدمج النهائي (ذكاء خارق)...")
         
-        # Validate all clips before compositing to avoid NoneType errors
         valid_clips = [bg, overlay] + [c for c in word_clips if c is not None]
-        
+        if not valid_clips:
+            raise ValueError("فشل في إنشاء مقاطع الفيديو.")
+
         final = CompositeVideoClip(valid_clips, size=(VIDEO_W, VIDEO_H))
         final = final.with_audio(audio).with_duration(audio.duration)
         
-        # Real-time Logger for MoviePy
-        logger = ProLogger(sp_placeholder, prog_bar, 65, 34, "⚙️ جاري التصدير النهائي...")
+        update_smart_progress(sp_placeholder, prog_bar, 75, "⚙️ جاري التصدير النهائي... (قد يستغرق دقائق)")
         
         final.write_videofile(
             out_path, 
@@ -316,7 +326,7 @@ def build_video_ultra(video_path, audio_path, words, font_size, out_path, sp_pla
             codec="libx264", 
             audio_codec="aac", 
             preset="ultrafast",
-            logger=logger,
+            logger=None, # Set to None to avoid NoneType iterator issues
             threads=4,
             temp_audiofile=os.path.join(tempfile.gettempdir(), f"audio_{int(time.time())}.m4a"),
             remove_temp=True
@@ -326,11 +336,10 @@ def build_video_ultra(video_path, audio_path, words, font_size, out_path, sp_pla
     except Exception as e:
         raise e
     finally:
-        try: audio.close()
-        except: pass
-        try: bg.close()
-        except: pass
-        try: final.close()
+        try:
+            if audio: audio.close()
+            if bg: bg.close()
+            if final: final.close()
         except: pass
 
 # ==================== UI Setup ====================
