@@ -1,7 +1,7 @@
 import streamlit as st
 import os
 import whisper
-from pydub import AudioSegment
+import subprocess
 from moviepy.editor import VideoFileClip, AudioFileClip, TextClip, CompositeVideoClip, ColorClip
 from arabic_reshaper import reshape
 from bidi.algorithm import get_display
@@ -46,17 +46,21 @@ else:
 # 2. دالات معالجة الصوت والنصوص (الذكاء الاصطناعي)
 # ==========================================
 def process_and_standardize_audio(uploaded_file):
-    """تحويل الصوت إجبارياً إلى صيغة WAV متوافقة لمنع خطأ الـ Tensor layout على الـ CPU"""
+    """تحويل الصوت إجبارياً باستخدام ffmpeg النظام مباشرة لتفادي مشاكل توافقية بايثون 3.14"""
     temp_input_path = "temp_input_audio" + os.path.splitext(uploaded_file.name)[1]
     with open(temp_input_path, "wb") as f:
         f.write(uploaded_file.getbuffer())
     
-    # تحويل الصوت باستخدام pydub
-    audio = AudioSegment.from_file(temp_input_path)
-    audio = audio.set_frame_rate(16000).set_channels(1)
-    
     standard_wav_path = "standard_audio.wav"
-    audio.export(standard_wav_path, format="wav")
+    if os.path.exists(standard_wav_path):
+        os.remove(standard_wav_path)
+    
+    # استدعاء أمر ffmpeg من النظام مباشرة (آمن ومستقر 100%)
+    cmd = [
+        "ffmpeg", "-y", "-i", temp_input_path,
+        "-ar", "16000", "-ac", "1", standard_wav_path
+    ]
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     
     # تنظيف الملف المؤقت الأصلي
     if os.path.exists(temp_input_path):
@@ -66,7 +70,7 @@ def process_and_standardize_audio(uploaded_file):
 def transcribe_voice(audio_path, size):
     """تحليل الصوت واستخراج الكلمات مع التوقيت الدقيق لكل كلمة"""
     model = whisper.load_model(size, device="cpu")
-    # إجبار fp16=False لأن سيرفر Streamlit لا يحتوي على كرت شاشة GPU
+    # إجبار fp16=False لأن سيرفر Streamlit يعتمد على الـ CPU
     result = model.transcribe(audio_path, fp16=False, word_timestamps=True)
     
     words_list = []
@@ -79,7 +83,6 @@ def transcribe_voice(audio_path, size):
                     "end": w["end"]
                 })
         else:
-            # حل احتياطي في حال لم تدعم النسخة التوقيت بالكلمة
             words_list.append({
                 "text": segment["text"].strip(),
                 "start": segment["start"],
@@ -103,7 +106,6 @@ with col1:
     uploaded_audio = st.file_uploader("اختر ملف التلاوة (MP3, WAV, M4A, etc.)", type=["mp3", "wav", "m4a", "ogg"])
     
     if uploaded_audio:
-        # إذا رفع المستخدم ملفاً جديداً، قم بتحديث الجلسة
         if st.button("بدء تحليل الصوت كلمة بكلمة", type="primary"):
             with st.spinner("جاري تهيئة وترميز الصوت بدقة سينمائية..."):
                 st.session_state.audio_path = process_and_standardize_audio(uploaded_audio)
@@ -134,18 +136,15 @@ if st.session_state.transcribed and uploaded_video:
         
         try:
             status_text.text("مرحلة 1: جاري معالجة فيديو الخلفية وضبط الأبعاد...")
-            # حفظ فيديو الخلفية المرفوع مؤقتاً
             temp_vid_path = "temp_bg_video.mp4"
             with open(temp_vid_path, "wb") as f:
                 f.write(uploaded_video.getbuffer())
             
             progress_bar.progress(25)
             
-            # قراءة الفيديو وتحديد مدته بناءً على ملف الصوت
             audio_clip = AudioFileClip(st.session_state.audio_path)
             bg_clip = VideoFileClip(temp_vid_path)
             
-            # إذا كان الفيديو أقصر من الصوت، قم بعمل تكرار (Loop)، وإذا كان أطول قم بقصه
             if bg_clip.duration < audio_clip.duration:
                 bg_clip = bg_clip.loop(duration=audio_clip.duration)
             else:
@@ -154,19 +153,17 @@ if st.session_state.transcribed and uploaded_video:
             progress_bar.progress(50)
             status_text.text("مرحلة 2: تطبيق تعتيم سينمائي بنسبة 33% لحماية ووضوح النص...")
             
-            # تطبيق التعتيم الذكي بإنشاء طبقة سوداء شفافة فوق الفيديو الأساسي
+            # تطبيق التعتيم بنسبة 33% عبر طبقة سوداء شفافة تبرز النص القرآني
             dark_overlay = ColorClip(size=bg_clip.size, color=(0, 0, 0)).set_duration(bg_clip.duration).set_opacity(0.33)
             faded_bg_clip = CompositeVideoClip([bg_clip, dark_overlay])
             
             progress_bar.progress(70)
             status_text.text("مرحلة 3: دمج النصوص القرآنية وتطبيق تأثيرات التلاشي (Fade)...")
             
-            # توليد نصوص الكلمات المتحركة
             text_clips = []
             for item in st.session_state.words_data:
                 fixed_text = format_arabic(item["text"])
                 
-                # إنشاء مقطع النص
                 txt_clip = TextClip(
                     fixed_text, 
                     fontsize=font_size, 
@@ -176,14 +173,11 @@ if st.session_state.transcribed and uploaded_video:
                     size=(faded_bg_clip.w - 100, None)
                 )
                 
-                # تحديد وقت الظهور والاختفاء وموقع النص (في المنتصف تماماً)
                 txt_clip = txt_clip.set_start(item["start"]).set_end(item["end"]).set_position(('center', 'center'))
-                
-                # تطبيق تأثير التلاشي للداخل والخارج بنعومة 0.15 ثانية لجعل الحركة احترافية
+                # تطبيق تأثير تلاشي ناعم عند الدخول والخروج (0.15 ثانية) لمظهر سينمائي مريح
                 txt_clip = txt_clip.crossfadein(0.15).crossfadeout(0.15)
                 text_clips.append(txt_clip)
                 
-            # دمج جميع الطبقات: الفيديو المعتم + الكلمات المتحركة + الصوت الأصلي
             final_video = CompositeVideoClip([faded_bg_clip] + text_clips).set_audio(audio_clip)
             
             progress_bar.progress(85)
@@ -196,14 +190,13 @@ if st.session_state.transcribed and uploaded_video:
                 codec="libx264", 
                 audio_codec="aac",
                 threads=4,
-                logger=None # إخفاء السجلات الطويلة لتفادي بطء المتصفح
+                logger=None
             )
             
             progress_bar.progress(100)
             status_text.text("🎉 تم الإنتاج بنجاح واكتمال العمل!")
             st.success("تم توليد الفيديو القرآني بنجاح واحترافية متناهية!")
             
-            # عرض زر التحميل للمستخدم مباشرة
             with open(output_filename, "rb") as file:
                 st.download_button(
                     label="📥 تحميل الفيديو القرآني النهائي بدقة HD",
@@ -212,7 +205,6 @@ if st.session_state.transcribed and uploaded_video:
                     mime="video/mp4"
                 )
                 
-            # تنظيف الملفات المؤقتة من السيرفر
             bg_clip.close()
             audio_clip.close()
             if os.path.exists(temp_vid_path):
@@ -220,7 +212,6 @@ if st.session_state.transcribed and uploaded_video:
                 
         except Exception as e:
             st.error(f"حدث خطأ أثناء الإنتاج والتصدير: {str(e)}")
-            st.info("تأكد من أن ملف الخط المختار متوافق تماماً ولا يسبب مشاكل في التمرير.")
 else:
     if not st.session_state.transcribed:
         st.warning("رجاءً قم بتحليل ملف الصوت أولاً من الخطوة رقم 1.")
