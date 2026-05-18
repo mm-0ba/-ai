@@ -7,3 +7,4 @@ arabic-reshaper
 python-bidi==0.4.2
 torch
 numba
+pydub
