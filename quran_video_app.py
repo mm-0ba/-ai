@@ -10,6 +10,7 @@ from moviepy import VideoFileClip, AudioFileClip, CompositeVideoClip, TextClip, 
 import moviepy.video.fx as vfx
 import shutil
 import time
+import subprocess
 from datetime import datetime
 
 # ==================== Page Config ====================
@@ -29,6 +30,16 @@ ARCHIVE_DIR = "produced_videos"
 
 os.makedirs(ARCHIVE_DIR, exist_ok=True)
 os.makedirs(FONTS_DIR, exist_ok=True)
+
+# ==================== Session State Initialization ====================
+if 'transcription_done' not in st.session_state:
+    st.session_state['transcription_done'] = False
+if 'words' not in st.session_state:
+    st.session_state['words'] = []
+if 'last_v' not in st.session_state:
+    st.session_state['last_v'] = None
+if 'audio_path' not in st.session_state:
+    st.session_state['audio_path'] = None
 
 # ==================== Helper Functions ====================
 def get_available_fonts():
@@ -61,6 +72,22 @@ def check_ffmpeg():
     for p in common:
         if os.path.exists(p): return p
     return None
+
+def convert_audio_for_whisper(input_path):
+    """Converts audio to a standard WAV format to fix Tensor 0 elements error"""
+    output_path = tempfile.mktemp(suffix=".wav")
+    try:
+        # Standardize to 16kHz, Mono, WAV
+        cmd = [
+            'ffmpeg', '-y', '-i', input_path,
+            '-ar', '16000', '-ac', '1', '-vn',
+            output_path
+        ]
+        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        return output_path
+    except Exception as e:
+        st.error(f"خطأ في تحويل ملف الصوت: {e}")
+        return input_path
 
 def download_font():
     if not os.path.exists(FONT_FILENAME):
@@ -119,11 +146,16 @@ def prepare_arabic_text(text: str) -> str:
 def load_whisper_model(size):
     return whisper.load_model(size, device="cpu")
 
-def transcribe_audio(path, size):
+def transcribe_audio_logic(path, size):
     words = []
     try:
+        # Step 1: Force conversion to standard WAV
+        std_audio_path = convert_audio_for_whisper(path)
+        
+        # Step 2: Load model and transcribe with fp16=False
         model = load_whisper_model(size)
-        result = model.transcribe(path, language="ar", word_timestamps=True, fp16=False, verbose=False)
+        result = model.transcribe(std_audio_path, language="ar", word_timestamps=True, fp16=False, verbose=False)
+        
         if not result or not isinstance(result, dict): return []
         segments = result.get("segments", [])
         if segments:
@@ -135,6 +167,12 @@ def transcribe_audio(path, size):
                             "start": w.get("start", 0), 
                             "end": w.get("end", 0)
                         })
+        
+        # Cleanup temp audio
+        if std_audio_path != path:
+            try: os.remove(std_audio_path)
+            except: pass
+            
         if not words and result.get("text"):
             text = result["text"].split()
             try:
@@ -287,22 +325,39 @@ with tab1:
     c1, c2 = st.columns(2)
     with c1:
         st.subheader("🎵 1. رفع الصوت")
-        aud_file = st.file_uploader("اختر ملف التلاوة", type=["mp3", "wav"])
+        aud_file = st.file_uploader("اختر ملف التلاوة", type=["mp3", "wav", "m4a", "ogg"])
         if aud_file:
+            # Check if this is a new file
+            if st.session_state.get('last_uploaded_name') != aud_file.name:
+                st.session_state['transcription_done'] = False
+                st.session_state['words'] = []
+                st.session_state['last_v'] = None
+                with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{aud_file.name}") as t:
+                    t.write(aud_file.getvalue())
+                    st.session_state['audio_path'] = t.name
+                st.session_state['last_uploaded_name'] = aud_file.name
+            
             st.audio(aud_file)
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as t:
-                t.write(aud_file.getvalue()); st.session_state['ap'] = t.name
+            
     with c2:
         if aud_file:
             st.subheader("🔍 2. التحليل الذكي")
-            if st.button("بدء تحليل الصوت كلمة بكلمة"):
-                sp_ana = st.empty(); prog_ana = st.progress(0)
-                update_smart_progress(sp_ana, prog_ana, 10, "🧠 تحميل نموذج Whisper...")
-                st.session_state['words'] = transcribe_audio(st.session_state['ap'], whisper_size)
-                update_smart_progress(sp_ana, prog_ana, 100, "✅ اكتمل تحليل النص والمزامنة!")
+            # Persistent analysis button status
+            if not st.session_state['transcription_done']:
+                if st.button("بدء تحليل الصوت كلمة بكلمة"):
+                    sp_ana = st.empty(); prog_ana = st.progress(0)
+                    update_smart_progress(sp_ana, prog_ana, 10, "🧠 تحويل الصوت وتحميل Whisper...")
+                    st.session_state['words'] = transcribe_audio_logic(st.session_state['audio_path'], whisper_size)
+                    st.session_state['transcription_done'] = True
+                    st.rerun()
+            else:
+                st.success(f"✅ تم تحليل ({len(st.session_state['words'])}) كلمة بنجاح!")
+                if st.button("🔄 إعادة التحليل"):
+                    st.session_state['transcription_done'] = False
+                    st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
 
-    if 'words' in st.session_state:
+    if st.session_state['transcription_done']:
         st.markdown('<div class="studio-card">', unsafe_allow_html=True)
         st.subheader("🎬 3. التصدير النهائي")
         mode = st.radio("خلفية الفيديو:", ["تلقائي من Pexels", "رفع يدوي"], horizontal=True)
@@ -327,14 +382,14 @@ with tab1:
                     out_name = f"Quran_Studio_{datetime.now().strftime('%M%S')}.mp4"
                     out_path = os.path.abspath(os.path.join(ARCHIVE_DIR, out_name))
                     
-                    if build_video_ultra(v_in, st.session_state['ap'], st.session_state['words'], font_size, out_path, sp, prog, selected_font_path, aspect_ratio):
+                    if build_video_ultra(v_in, st.session_state['audio_path'], st.session_state['words'], font_size, out_path, sp, prog, selected_font_path, aspect_ratio):
                         st.balloons()
                         st.session_state['last_v'] = out_path
                         st.rerun()
                 except Exception as e: st.error(f"خطأ في الإنتاج: {e}")
         st.markdown('</div>', unsafe_allow_html=True)
 
-    if 'last_v' in st.session_state:
+    if st.session_state['last_v']:
         st.markdown('<div class="studio-card">', unsafe_allow_html=True)
         st.subheader("🎉 تم الإنتاج بنجاح!")
         st.video(st.session_state['last_v'])
